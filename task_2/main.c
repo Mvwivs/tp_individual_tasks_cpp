@@ -10,11 +10,10 @@
 	2) Скобки '(', ')'
 	3) Целые и вещественные числа, в нотации '123', '123.345', все
 	операции должны быть вещественны, а результаты выведены с точностю до
-	двух знаков после запятой в том числе целые '2.00' 
-	4) необходимо учитывать приоритеты операций, и возможность унарного минуса, пробелы ничего
-    не значат 
-    5) Если в выражении встретилась ошибка требуется вывести в
-    стандартный поток вывода "[error]" (без кавычек)
+	двух знаков после запятой в том числе целые '2.00'
+	4) необходимо учитывать приоритеты операций, и возможность унарного
+   минуса, пробелы ничего не значат 5) Если в выражении встретилась ошибка
+   требуется вывести в стандартный поток вывода "[error]" (без кавычек)
 
 */
 /*
@@ -28,6 +27,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+typedef enum { ret_OK = 0, ret_ERROR = 1 } Error_t;
 
 typedef enum {
 	NUMBER = 0,
@@ -45,51 +46,57 @@ typedef struct {
 	char* expression; // input expression
 	size_t pos;       // current character position
 	TokenType_t type; // current token type
-	double value;     // floating point value of input character
+	double value;     // floating point value of last number
 } Token_t;
 
-void parse();
-void error();
-void getToken();
-void match(TokenType_t tokenType);
-double expression();
-double term();
-double factor();
-char getChar();
-void unGetChar();
-
-Token_t token;
+Error_t parse(Token_t* token);
+void getToken(Token_t* token);
+Error_t match(Token_t* token, TokenType_t tokenType);
+Error_t expression(Token_t* token, double* result);
+Error_t term(Token_t* token, double* result);
+Error_t factor(Token_t* token, double* result);
+char getChar(Token_t* token);
+void unGetChar(Token_t* token);
 
 int main() {
+	Token_t token = {.pos = 0};
+
 	if (scanf("%ms", &token.expression) != 1) {
 		printf("[error]");
-		exit(0);
+		return 0;
 	}
-	parse();
+	parse(&token);
+	free(token.expression);
 	return 0;
 }
 
 /* Parse arithmetic expression from stdio */
-void parse() {
-	getToken();
-	double result = expression();
+Error_t parse(Token_t* token) {
+	double result = 0;
+	getToken(token);
+	if (expression(token, &result) != ret_OK) {
+		printf("[error]");
+		return ret_ERROR;
+	}
 
-	if (token.type == EOL) {
+	if (token->type == EOL) {
 		printf("%.2f", result);
+		return ret_OK;
 	} else {
-		error();
+		printf("[error]");
+		return ret_ERROR;
 	}
 }
 
 /* Read character from stdio and determine token */
-void getToken() {
+void getToken(Token_t* token) {
 	char currentChar = '\n';
-	while ((currentChar = getChar()) == ' ')
+	while ((currentChar = getChar(token)) == ' ')
 		; // skip spaces
 
 	if (isdigit(currentChar)) { // convert input number to float
-		token.type = NUMBER;
-		token.value = 0;
+		token->type = NUMBER;
+		token->value = 0;
 		double divider = 1;
 		unsigned int multiplier = 10;
 
@@ -98,116 +105,159 @@ void getToken() {
 				multiplier = 1;
 				divider = 10;
 			} else {
-				token.value = multiplier * token.value +
-					      (currentChar - '0') / divider;
+				token->value = multiplier * token->value +
+					       (currentChar - '0') / divider;
 				if (multiplier == 1) {
 					divider *= 10;
 				}
 			}
-			currentChar = getChar();
+			currentChar = getChar(token);
 		}
-		unGetChar();
+		unGetChar(token);
 
 	} else {
 		switch (currentChar) {
 		case '+':
-			token.type = PLUS;
+			token->type = PLUS;
 			break;
 		case '-':
-			token.type = MINUS;
+			token->type = MINUS;
 			break;
 		case '/':
-			token.type = DIVIDE;
+			token->type = DIVIDE;
 			break;
 		case '*':
-			token.type = MULTIPLY;
+			token->type = MULTIPLY;
 			break;
 		case '(':
-			token.type = LEFT_BRACKET;
+			token->type = LEFT_BRACKET;
 			break;
 		case ')':
-			token.type = RIGHT_BRACKET;
+			token->type = RIGHT_BRACKET;
 			break;
 		case '\0':
-			token.type = EOL;
+			token->type = EOL;
 			break;
 		default:
-			token.type = ERROR;
+			token->type = ERROR;
 			break;
 		}
 	}
 }
 
 /* Parse EBFL: expression -> term {+term | -term} */
-double expression() {
-	double result = term();
+Error_t expression(Token_t* token, double* result) {
+	//*result = 0;
+	double calculate = 0;
+	Error_t err = term(token, &calculate);
+	if (err == ret_ERROR) {
+		return ret_ERROR;
+	}
+	*result = calculate;
 
-	while (token.type == PLUS || token.type == MINUS) {
-		if (token.type == PLUS) {
-			match(PLUS);
-			result += term();
+	while (token->type == PLUS || token->type == MINUS) {
+		if (token->type == PLUS) {
+			err = match(token, PLUS);
+			if (err == ret_ERROR) {
+				return ret_ERROR;
+			}
+			err = term(token, &calculate);
+			if (err == ret_ERROR) {
+				return ret_ERROR;
+			}
+			*result += calculate;
 		} else {
-			match(MINUS);
-			result = result - term();
+			err = match(token, MINUS);
+			if (err == ret_ERROR) {
+				return ret_ERROR;
+			}
+			err = term(token, &calculate);
+			if (err == ret_ERROR) {
+				return ret_ERROR;
+			}
+			*result = *result - calculate;
 		}
 	}
-	return result;
+	return ret_OK;
 }
 
 /* Parse EBFL: term -> factor {*factor | /factor} */
-double term() {
-	double result = factor();
+Error_t term(Token_t* token, double* result) {
+	double calculate = 0;
 
-	while (token.type == MULTIPLY || token.type == DIVIDE) {
-		if (token.type == MULTIPLY) {
-			match(MULTIPLY);
-			result = result * factor();
+	Error_t err = factor(token, result);
+	if (err == ret_ERROR) {
+		return ret_ERROR;
+	}
+
+	while (token->type == MULTIPLY || token->type == DIVIDE) {
+		if (token->type == MULTIPLY) {
+			err = match(token, MULTIPLY);
+			if (err == ret_ERROR) {
+				return ret_ERROR;
+			}
+			err = factor(token, &calculate);
+			if (err == ret_ERROR) {
+				return ret_ERROR;
+			}
+			*result = *result * calculate;
 		} else {
-			match(DIVIDE);
-			result = result / factor();
+			err = match(token, DIVIDE);
+			if (err == ret_ERROR) {
+				return ret_ERROR;
+			}
+			err = factor(token, &calculate);
+			if (err == ret_ERROR) {
+				return ret_ERROR;
+			}
+			*result = *result / calculate;
 		}
 	}
-	return result;
+	return ret_OK;
 }
 
 /* Parse EBFL: factor -> (expression)|Number */
-double factor() {
-	double result;
+Error_t factor(Token_t* token, double* result) {
+	*result = 0;
+	Error_t err = ret_OK;
 
-	if (token.type == LEFT_BRACKET) {
-		match(LEFT_BRACKET);
-		result = expression();
-		match(RIGHT_BRACKET);
+	if (token->type == LEFT_BRACKET) {
+		err = match(token, LEFT_BRACKET);
+		if (err == ret_ERROR) {
+			return ret_ERROR;
+		}
+		err = expression(token, result);
+		if (err == ret_ERROR) {
+			return ret_ERROR;
+		}
+		err = match(token, RIGHT_BRACKET);
+		if (err == ret_ERROR) {
+			return ret_ERROR;
+		}
 	} else {
-		getToken();
-		result = token.value;
+		getToken(token);
+		*result = token->value;
 	}
-	return result;
+	return ret_OK;
 }
 
 /* Get next char from input */
-char getChar() {
-	char currentChar = token.expression[token.pos];
-	++token.pos;
+char getChar(Token_t* token) {
+	char currentChar = token->expression[token->pos];
+	++token->pos;
 	return currentChar;
 }
 
-void unGetChar() {
-	--token.pos;
-}
-
-/* Exit program on error */
-void error() {
-	printf("[error]");
-	free(token.expression);
-	exit(0);
+void unGetChar(Token_t* token) {
+	--token->pos;
 }
 
 /* Match token type */
-void match(TokenType_t tokenType) {
-	if (token.type == tokenType) {
-		getToken();
+Error_t match(Token_t* token, TokenType_t tokenType) {
+	if (token->type == tokenType) {
+		getToken(token);
+		return ret_OK;
 	} else {
-		error();
+		return ret_ERROR;
 	}
 }
